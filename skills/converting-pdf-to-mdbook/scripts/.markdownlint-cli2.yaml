@@ -1,0 +1,68 @@
+# markdownlint-cli2 configuration for PDF-to-mdBook converted content
+#
+# Book content has different formatting needs than typical markdown docs:
+# - Paragraphs are long (no artificial line wrapping)
+# - HTML comments track PDF page origins
+# - Chapter structure may include multiple top-level headings
+
+config:
+
+  # --- Disabled rules (conflict with book formatting) ---
+
+  # MD013 - Line length: book paragraphs are naturally long
+  MD013: false
+
+  # MD025 - Multiple top-level headings: chapter files may have multiple H1s for parts
+  MD025: false
+
+  # MD033 - Inline HTML: we use <!-- pdf-page: N --> comments for page metadata
+  MD033: false
+
+  # MD034 - Bare URLs: some book content includes raw URLs
+  MD034: false
+
+  # MD041 - First line must be heading: files may start with page metadata comments
+  MD041: false
+
+  # MD026 - No trailing punctuation in headings: book headings often have punctuation
+  MD026: false
+
+  # MD029 - Ordered list item prefix: book content uses explicit numbering (2, 3, 4...)
+  MD029: false
+
+  # MD036 - Emphasis as heading: book content uses italicized names that aren't headings
+  MD036: false
+
+  # MD060 - Table column style: book tables use compact pipe style from OCR
+  MD060: false
+
+  # --- Enabled rules (important for book quality) ---
+
+  # MD001 - Heading increment: headings should only increment by one level
+  MD001: true
+
+  # MD004 - Consistent list markers: use dash for unordered lists
+  MD004:
+    style: dash
+
+  # MD007 - Proper list indentation
+  MD007: true
+
+  # MD011 - No reversed links: catch (text)[url] mistakes
+  MD011: true
+
+  # MD022 - Blanks around headings
+  MD022: true
+
+  # MD023 - Headings must start at beginning of line
+  MD023: true
+
+  # MD024 - No duplicate headings: siblings_only allows same text under different parents
+  MD024:
+    siblings_only: true
+
+  # MD040 - Fenced code blocks should specify a language
+  MD040: true
+
+  # MD042 - No empty links: all links must have destinations
+  MD042: true
