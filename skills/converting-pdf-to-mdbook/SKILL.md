@@ -1,8 +1,6 @@
 ---
 name: converting-pdf-to-mdbook
-description: Use when converting a PDF book or document into mdBook format,
-especially when scanned pages need vision-based transcription and
-page-by-page reconciliation.
+description: Use when converting a PDF book or document into mdBook format, especially when scanned pages need vision-based transcription and page-by-page reconciliation.
 ---
 
 # Converting PDF Books to mdBook
