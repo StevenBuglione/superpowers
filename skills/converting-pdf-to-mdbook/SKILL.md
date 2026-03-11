@@ -1,26 +1,76 @@
 ---
 name: converting-pdf-to-mdbook
-description: Use when converting a PDF book or document into mdBook format, when digitizing scanned books, or when transforming PDF content into structured markdown documentation
+description: Use when converting a PDF book or document into mdBook format,
+especially when scanned pages need vision-based transcription and
+page-by-page reconciliation.
 ---
 
 # Converting PDF Books to mdBook
 
-One-shot conversion of scanned PDF books into professional mdBook format using AI vision and parallel subagents.
+Convert scanned PDF books into mdBook format with GitHub Copilot CLI native
+subagents.
 
-**Core principle:** The AI model reads rendered page images directly via vision — no OCR tools. Helper scripts handle only deterministic tasks (rendering pages, validating output). The model does all interpretation, structuring, and markdown generation.
+**Core principle:** page accountability comes before chapter assembly. Every
+physical PDF page must be read, verified, reconciled, and, when needed,
+re-read by a table specialist before that page may be assembled into a
+chapter.
+
+**Default orchestration contract:**
+
+- `1 physical PDF page -> 1 reader subagent`
+- `1 physical PDF page -> 1 verifier subagent`
+- `structured page -> separate table-specialist re-read`
+- `chapter assembly -> only after reader/verifier reconciliation`
+
+## Quick Reference
+
+| Unit | Default |
+| --- | --- |
+| Reader scope | Exactly 1 physical PDF page |
+| Verifier scope | The same 1 physical PDF page |
+| Structured pages | Separate table-specialist re-read |
+| Coordinator | Native Copilot CLI orchestration via `/fleet` |
+| Deterministic scripts | Rendering and validation only |
+| Done means | Build + lint + coverage audit all pass |
 
 ## Prerequisites
 
-Before starting, verify all tools are available:
+Before starting, verify the deterministic tooling is available:
 
 ```bash
 # Run from the skill's scripts directory
 ./scripts/setup-tools.sh --check
 ```
 
-Required tools: `pdfinfo`, `pdftoppm`, `pdftotext` (poppler-utils), `mdbook`, `markdownlint-cli2`
+Required tools: `pdfinfo`, `pdftoppm`, `mdbook`, and `markdownlint-cli2`.
 
-If any are missing, run without `--check` to install them.
+If any are missing, run the setup script without `--check` to install them.
+
+## Deterministic vs. Agentic Work
+
+Use deterministic scripts only for deterministic work:
+
+- `setup-tools.sh` checks tool availability.
+- `render-pages.sh` renders PDF pages to images.
+- `validate-mdbook.sh` runs build, lint, and file validation.
+
+Use native Copilot CLI subagents for judgment-heavy work:
+
+- page reading
+- page verification
+- structured-page table re-reads
+- reconciliation decisions
+- chapter assembly decisions
+
+**Non-negotiable rule:** transcription and verification must come from the
+model's native vision capabilities. Do **not** use OCR engines, extracted text
+layers, or text-conversion shortcuts as a substitute for reading the rendered
+page images.
+
+**Do NOT** write shell loops, tmux sessions, background workers, or headless
+helper scripts to spawn agents. In Copilot CLI, `/fleet` is the orchestration
+surface for fan-out and reconciliation. Bash is for rendering and validation,
+not for simulating a fleet.
 
 ## Pipeline Overview
 
@@ -29,13 +79,21 @@ digraph pipeline {
     rankdir=TB;
     node [shape=box];
 
-    "Phase 1:\nAnalyze PDF" -> "Phase 2:\nRender Pages";
-    "Phase 2:\nRender Pages" -> "Phase 3:\nParallel Vision Read";
-    "Phase 3:\nParallel Vision Read" -> "Phase 4:\nStructure & Scaffold";
-    "Phase 4:\nStructure & Scaffold" -> "Phase 5:\nAssemble & Cross-Reference";
-    "Phase 5:\nAssemble & Cross-Reference" -> "Phase 6:\nValidate & Fix Loop";
-    "Phase 6:\nValidate & Fix Loop" -> "Phase 6:\nValidate & Fix Loop" [label="errors found\n(max 5 iterations)"];
-    "Phase 6:\nValidate & Fix Loop" -> "Done" [label="all checks pass"];
+    "Analyze PDF" -> "Render pages";
+    "Render pages" -> "Create page ledger";
+    "Create page ledger" -> "Reader /fleet wave";
+    "Reader /fleet wave" -> "Verifier /fleet wave";
+    "Verifier /fleet wave" -> "Structured page?";
+    "Structured page?" [shape=diamond];
+    "Structured page?" -> "Table-specialist re-read" [label="yes"];
+    "Structured page?" -> "Reconcile page" [label="no"];
+    "Table-specialist re-read" -> "Reconcile page";
+    "Reconcile page" -> "All pages reconciled?";
+    "All pages reconciled?" [shape=diamond];
+    "All pages reconciled?" -> "Assemble chapters" [label="yes"];
+    "All pages reconciled?" -> "Reader /fleet wave" [label="fix gaps"];
+    "Assemble chapters" -> "Validate + coverage audit";
+    "Validate + coverage audit" -> "Done" [label="all gates pass"];
 
     "Done" [shape=doublecircle];
 }
@@ -45,258 +103,368 @@ digraph pipeline {
 
 You MUST create a task for each item and complete them in order:
 
-1. **Verify prerequisites** — run `setup-tools.sh --check`, install if needed
-2. **Analyze PDF** — extract metadata, detect structure, build chapter map
-3. **Confirm chapter map with user** — present findings, get approval before bulk processing
-4. **Render pages to images** — run `render-pages.sh` for all pages
-5. **Parallel vision read** — dispatch subagents to read page chunks
-6. **Structure and scaffold mdBook** — create book.toml, SUMMARY.md, chapter files
-7. **Assemble and cross-reference** — merge chunks, fix links, typography pass
-8. **Validate and fix loop** — run `validate-mdbook.sh`, fix errors, repeat until clean
-9. **Final report** — summarize results, flag uncertain readings for human review
+1. **Verify prerequisites** — run `setup-tools.sh --check`, install if needed.
+2. **Analyze PDF** — extract metadata and build the chapter map.
+3. **Confirm chapter map with user** — this is a hard gate before bulk work.
+4. **Render pages to images** — run `render-pages.sh` for the working range.
+5. **Create a page-accountability ledger** — one row per physical page.
+6. **Dispatch reader and verifier waves** — native Copilot CLI subagents only.
+7. **Dispatch table-specialist re-reads** — every structured page gets one.
+8. **Reconcile every page** — resolve disagreements before assembly.
+9. **Assemble and scaffold mdBook** — only from reconciled pages.
+10. **Validate and audit coverage** — build, lint, and coverage audit all pass.
+11. **Final report and cleanup** — summarize outputs and unresolved concerns.
 
 ## Phase 1: Analyze PDF
 
-Extract everything you can about the book before reading any pages:
+Extract everything you can about the book before reading pages:
 
 ```bash
-# Get metadata
 pdfinfo <pdf-file>
-
-# Check if text layer exists (scanned PDFs may have poor OCR)
-pdftotext <pdf-file> - | head -300
 ```
 
-**From metadata, extract:**
-- Title, author, creation date, page count
-- Whether a text layer exists (and its quality)
+Capture at least:
 
-**Find the Table of Contents:**
-1. If text layer exists, search for "TABLE OF CONTENTS", "CONTENTS", or similar
-2. If text is poor/missing, render the first 15–20 pages as images and read them via vision
-3. Build a **chapter map**: `{ chapter_title: [start_page, end_page] }`
+- title
+- author
+- creation date
+- total page count
+- page dimensions and rotation if relevant to rendering
 
-**Include in chapter map:**
-- Front matter (title page, copyright, dedication, preface, introduction)
-- All chapters/parts
-- Back matter (appendix, index, bibliography, glossary)
+Find the table of contents:
 
-**Present the chapter map to the user** and get confirmation before proceeding. This is a hard gate — do NOT proceed with bulk rendering until the user approves the structure.
+1. Render the first 15 to 20 pages and inspect them with native vision.
+2. Find `TABLE OF CONTENTS`, `CONTENTS`, or equivalent headings visually.
+3. Build a chapter map: `{ chapter_title: [start_page, end_page] }`.
+
+Do not fall back to extracted text during analysis. The rendered page images are
+the source of truth for chapter discovery and later transcription.
+
+Include front matter, main chapters or parts, and back matter.
+
+**Hard gate:** present the chapter map to the user and get approval before
+bulk rendering or `/fleet` dispatch. A bad chapter map poisons every later
+assembly step.
 
 ## Phase 2: Render Pages to Images
 
 ```bash
-# Render all pages at 300 DPI
-./scripts/render-pages.sh <pdf-file> /tmp/pdf-conversion/<book-slug>/pages/ --dpi 300
+./scripts/render-pages.sh <pdf-file> /tmp/pdf-conversion/<book-slug>/pages/ \
+  --dpi 300
 ```
 
-**300 DPI** is the sweet spot — high enough for AI vision to read accurately, manageable file sizes.
+Use 300 DPI unless the source requires a different setting.
 
-Verify the output: rendered image count must match expected page count from pdfinfo.
+Verify the output immediately:
 
-**Disk space warning:** An 800-page book at 300 DPI generates ~2–3 GB of images. Ensure sufficient disk space. Clean up after conversion is complete.
+- rendered image count matches `pdfinfo` page count
+- filenames map cleanly to physical PDF page numbers
+- disk space is sufficient for the full render set
 
-## Phase 3: Parallel Vision Reading
+## Phase 3: Create the Page-Accountability Ledger
 
-This is the most token-intensive phase. Divide pages into chunks and dispatch parallel subagents.
+Before you dispatch any reader, create an accountability record for every
+physical PDF page in scope. This ledger is the conversion contract.
 
-### Chunk Strategy
+Track at least these fields for each page:
 
-**Chunk size: 20–30 pages** (balances parallelism vs. context continuity)
+- physical page number
+- printed page label, if visible
+- chapter assignment
+- reader status
+- verifier status
+- structured-page flag
+- table-specialist status
+- reconciliation status
+- assembled file path
 
-Align chunks on chapter boundaries where possible. If a chapter is longer than 30 pages, split at section breaks.
+A simple ledger can look like this:
 
-### Subagent Dispatch
-
-For each chunk, dispatch a subagent with:
-
-1. **Page images** for the chunk (as file paths for the agent to view)
-2. **Chapter context**: which chapter these pages belong to, what came before
-3. **Formatting instructions**: reference `references/mdbook-formatting-guide.md`
-4. **Output format**: clean markdown with `<!-- pdf-page: N -->` comments
-
-**Subagent prompt template:**
-
-```
-You are converting pages [START]-[END] of "[BOOK TITLE]" from scanned images to markdown.
-
-These pages belong to: [CHAPTER NAME]
-Previous chunk ended with: [LAST PARAGRAPH OR CONTEXT]
-
-Read each page image carefully and produce clean markdown following these rules:
-- Mark every page boundary: <!-- pdf-page: N -->
-- Use ## for chapter titles, ### for sections, #### for subsections
-- Preserve all text faithfully — do not summarize or paraphrase
-- Mark uncertain readings: <!-- ocr-uncertain: "word" -->
-- Skip page headers/footers (running titles, page numbers)
-- Skip decorative elements
-- Use blockquotes (>) for prayers, quoted passages, or verse
-- Use proper footnote syntax: [^1] with definitions at end
-- Straight quotes, em-dashes (—), proper ellipsis (…)
-
-Page images are at: [FILE PATHS]
-
-Output ONLY the markdown content. No explanations or commentary.
+```text
+page=42 chapter=front-03-preface read=pending verify=pending
+structured=unknown table_reread=not-needed reconciled=no assembled=
 ```
 
-### Handling Chunk Boundaries
+**Hard gate:** if a page does not have a ledger row, it does not exist for the
+conversion. Do not rely on memory or prose summaries for coverage.
 
-Provide 1–2 pages of overlap between chunks so subagents have context. The coordinator (you) merges overlapping content and resolves any discrepancies.
+## Phase 4: Native Copilot CLI Page Orchestration
 
-## Phase 4: Structure & Scaffold mdBook
+Use `/fleet` to fan out page-scoped work. The accountability unit is always
+one physical page, even if you provide adjacent pages as context.
 
-Once all chunks are read, create the mdBook project:
+### Reader Wave
+
+Dispatch one reader subagent per physical page. The reader may see adjacent
+pages for context, but it must output transcription for the target page only.
+
+**Reader prompt template:**
+
+```text
+You are the page reader for physical PDF page [PHYSICAL_PAGE] of
+"[BOOK TITLE]".
+
+Your target is exactly one physical page. You may inspect adjacent page images
+for continuation context, but your output must cover only physical page
+[PHYSICAL_PAGE].
+
+Inputs:
+- Target image: [TARGET_IMAGE_PATH]
+- Optional context images: [PREV_IMAGE_PATH], [NEXT_IMAGE_PATH]
+- Chapter assignment: [CHAPTER_NAME]
+- Formatting authority:
+  skills/converting-pdf-to-mdbook/references/mdbook-formatting-guide.md
+
+Required checks before writing:
+1. Inspect the full page, including top and bottom margins, inner and outer
+   margins, footnote area, side-notes, captions, and table notes.
+2. Decide whether the page contains structured content such as a table,
+   matrix, calendar, ledger, form, or parallel columns.
+3. Distinguish body text from repeated running headers, repeated footers,
+   page numbers, and decorative ornaments.
+
+Output contract:
+- Return status: DONE or DONE_WITH_CONCERNS.
+- State whether this page needs a table-specialist re-read.
+- Emit markdown for this page only.
+- Start with the exact page marker:
+  <!-- pdf-page: physical=[PHYSICAL_PAGE] printed=[PRINTED_LABEL_IF_VISIBLE] -->
+- Preserve all body text, footnotes, side-notes, marginalia, captions,
+  and table notes that belong to the page.
+- Use <!-- vision-uncertain: "..." --> for uncertain readings.
+- Do not summarize, paraphrase, normalize away notes, or merge multiple
+  physical pages into one answer.
+```
+
+### Verifier Wave
+
+Dispatch one verifier subagent per physical page. The verifier checks the same
+page independently against the reader output.
+
+**Verifier prompt template:**
+
+```text
+You are the page verifier for physical PDF page [PHYSICAL_PAGE] of
+"[BOOK TITLE]".
+
+Inputs:
+- Target image: [TARGET_IMAGE_PATH]
+- Reader output for the same page: [READER_OUTPUT]
+- Optional context images: [PREV_IMAGE_PATH], [NEXT_IMAGE_PATH]
+- Chapter assignment: [CHAPTER_NAME]
+- Formatting authority:
+  skills/converting-pdf-to-mdbook/references/mdbook-formatting-guide.md
+
+Audit this page from edge to edge. Explicitly check:
+- top and bottom margins
+- inner and outer margins
+- footnotes and footnote continuations
+- side-notes and marginalia
+- captions, legends, and table notes
+- whether repeated headers and footers were correctly excluded
+
+Return:
+- VERIFIED if the page is complete and correctly excluded only repeated
+  artifacts
+- NEEDS_REVISION if anything is missing, misplaced, invented, or misread
+- TABLE_SPECIALIST_REQUIRED if structured content needs a dedicated re-read
+
+When reporting problems, name the missing or suspect region precisely.
+Examples: "outer margin note omitted", "table note below rule missing",
+"footnote 3 dropped", "caption merged into body paragraph".
+```
+
+### Structured Pages: Table-Specialist Re-Read
+
+Any page with tables or other structured content gets its own specialist pass.
+Do this even if the reader and verifier mostly agree.
+
+Trigger a table-specialist re-read for pages with:
+
+- simple or complex tables
+- continuation tables
+- ledgers, calendars, or schedules
+- multi-column forms
+- side labels or row groups
+- captions, legends, or notes tied to structured layouts
+
+**Table-specialist prompt template:**
+
+```text
+You are the table specialist for physical PDF page [PHYSICAL_PAGE] of
+"[BOOK TITLE]".
+
+Your job is to re-read only the structured content on this page and verify
+that tables, row groups, captions, legends, side labels, and table notes are
+represented faithfully. You must also explicitly inspect the page margins,
+footnotes, side-notes, and notes attached to the structured content.
+
+Inputs:
+- Target image: [TARGET_IMAGE_PATH]
+- Reader output: [READER_OUTPUT]
+- Verifier findings: [VERIFIER_FINDINGS]
+- Formatting authority:
+  skills/converting-pdf-to-mdbook/references/mdbook-formatting-guide.md
+
+Return:
+- Whether the page needs a pipe table or HTML table
+- Corrections required for headers, merged cells, continuation labels,
+  legends, and notes
+- Any text that was omitted from margins, footnotes, side-notes, table notes,
+  captions, or side labels
+
+Do not approve a page until margins, footnotes, side-notes, captions,
+legends, and table notes have been accounted for explicitly.
+```
+
+## Phase 5: Reconcile Before Assembly
+
+Reader and verifier outputs must be reconciled page by page.
+
+For each physical page:
+
+1. Compare the reader output, verifier result, and table-specialist result,
+   if any.
+2. Fix omissions or disagreements with a targeted re-read of that same page.
+3. Re-run the verifier on every corrected page before closing reconciliation.
+4. Re-run the table specialist too if the corrected page still contains
+   structured content or if the fix touched table-adjacent notes.
+5. Mark the page `reconciled=yes` only when:
+   - the verifier has approved the latest corrected output,
+   - any required table-specialist pass has approved the latest corrected
+     output, and
+   - the final page output still covers exactly one physical page.
+
+**Hard gate:** chapter assembly is forbidden until every page in that chapter
+is reconciled. Build-ready markdown assembled from unreconciled pages is still
+incomplete work.
+
+## Phase 6: Structure, Scaffold, and Assemble mdBook
+
+Once the relevant pages are reconciled, create the mdBook project:
 
 ```bash
 mdbook init <output-dir> --title "<title>"
 ```
 
-**Configure book.toml:**
-```toml
-[book]
-title = "Book Title"
-authors = ["Author Name"]
-language = "en"
-description = "Converted from PDF. Original: [source info]"
+Configure `book.toml` and `SUMMARY.md` using the verified chapter map and the
+formatting guide.
 
-[build]
-build-dir = "book"
+Assembly rules:
 
-[output.html]
-no-section-label = false
-```
+- Append reconciled page outputs in physical page order.
+- Preserve exact page markers from the formatting guide.
+- Keep chapter boundaries aligned to the approved chapter map, not arbitrary
+  page slices.
+- Convert cross-references and normalize typography only after page coverage
+  is locked.
+- Do not resurrect the old chunk merge pattern. Page reconciliation replaces
+  chunk overlap management.
 
-**Generate SUMMARY.md** from the chapter map. Follow the structure in `references/mdbook-formatting-guide.md`:
+## Phase 7: Validate and Audit Coverage
 
-```markdown
-# Summary
-
-[Title Page](./front-00-title.md)
-[Preface](./front-01-preface.md)
-
----
-
-- [Chapter 1: Title](./chapter-01-slug.md)
-- [Chapter 2: Title](./chapter-02-slug.md)
-
----
-
-- [Index](./back-01-index.md)
-```
-
-**Create chapter files** matching SUMMARY.md. Use naming convention: `chapter-NN-slug.md`
-
-## Phase 5: Assemble & Cross-Reference
-
-Place chunk outputs into the correct chapter files. Then perform these passes:
-
-### 1. Merge Pass
-- Resolve chunk boundary overlaps (deduplicate content from overlapping pages)
-- Ensure paragraphs split across chunks are properly joined
-- Verify no content is missing between chunks
-
-### 2. Cross-Reference Pass
-- Convert "see page X" references to markdown links: `[text](./chapter-NN.md#heading)`
-- Consolidate footnotes (renumber sequentially within each chapter)
-- Verify every footnote reference has a definition and vice versa
-
-### 3. Typography Pass
-- Fix common OCR vision artifacts
-- Normalize quotation marks, dashes, ellipses
-- Fix spacing issues (double spaces, missing spaces after periods)
-- Ensure proper Unicode encoding for accented characters
-
-### 4. Structure Pass
-- Verify heading hierarchy (no skipped levels)
-- Ensure page metadata comments are present and sequential
-- Confirm chapter ordering matches original book
-
-## Phase 6: Validate & Fix Loop
+Run the deterministic validation script:
 
 ```bash
 ./scripts/validate-mdbook.sh <mdbook-project-dir>
 ```
 
-```dot
-digraph validate {
-    "Run validate-mdbook.sh" -> "All checks pass?" [label=""];
-    "All checks pass?" -> "Done ✓" [label="yes"];
-    "All checks pass?" -> "Parse errors" [label="no"];
-    "Parse errors" -> "Fix each error" -> "Run validate-mdbook.sh";
-    "All checks pass?" -> "Surface to user" [label="5th iteration\nstill failing"];
+Then run the full coverage audit from
+`references/validation-checklist.md`.
 
-    "All checks pass?" [shape=diamond];
-    "Done ✓" [shape=doublecircle];
-    "Surface to user" [shape=doublecircle];
-}
-```
+### Validation Gates
 
-**Validation includes:**
-1. `mdbook build` succeeds
-2. `markdownlint-cli2` passes with skill config
-3. All SUMMARY.md links resolve
-4. No orphaned .md files
-5. Page metadata is sequential
+1. **Build gate** — `mdbook build` succeeds.
+2. **Lint gate** — `markdownlint-cli2` passes.
+3. **Coverage audit gate** — page accountability, structured-page re-reads,
+   completeness, and reconciliation checks all pass.
 
-**If errors are found:** Fix them, then re-run. Maximum 5 iterations — if still failing after 5 attempts, surface the remaining errors to the user with context.
+**Hard gate:** build and lint success are necessary but not sufficient.
+The conversion is NOT done until the coverage audit succeeds.
 
-**After validation passes**, also check `references/validation-checklist.md` for the manual verification items (content quality, completeness, OCR uncertain markers).
+Use this claim discipline:
+
+- `mdbook build` passes -> build gate passed
+- `markdownlint-cli2` passes -> lint gate passed
+- page ledger and validation checklist pass -> coverage audit passed
+- only all three together -> conversion complete
+
+If build and lint are green but the coverage audit finds a missing page,
+missing footnote, unresolved side-note, or skipped table re-read, the job is
+still failing.
 
 ## Final Report
 
-After successful conversion, report:
+After all gates pass, report:
 
-```
+```text
 === PDF to mdBook Conversion Complete ===
 
 Source:     manual-of-prayers.pdf (804 pages)
 Output:     ./manual-of-prayers-mdbook/
 Chapters:   42 chapters + 6 front/back matter files
-Pages:      804 pages processed
-Uncertain:  12 OCR-uncertain markers (review recommended)
+Pages:      804 pages reconciled
+Readers:    804 reader subagents completed
+Verifiers:  804 verifier subagents completed
+Tables:     73 table-specialist re-reads completed
+Uncertain:  12 vision-uncertain markers (review recommended)
 
-Build:      ✓ mdbook build successful
-Lint:       ✓ markdownlint clean
-Links:      ✓ all SUMMARY.md links valid
+Build:      PASS
+Lint:       PASS
+Coverage:   PASS
 
-To view:    mdbook serve ./manual-of-prayers-mdbook/
-To build:   mdbook build ./manual-of-prayers-mdbook/
+Next:       mdbook serve ./manual-of-prayers-mdbook/
 ```
 
-**Always list `<!-- ocr-uncertain -->` markers** with their file locations so the user can review them.
+Always list unresolved `<!-- vision-uncertain -->` markers with file locations.
+If any page required manual intervention, identify the exact physical page.
 
 ## Cleanup
 
-After conversion is verified:
-- Delete rendered page images from temp directory
-- Keep the mdBook project as the final output
+After verification is complete:
+
+- delete rendered page images from the temporary directory
+- keep the mdBook project as the final output
+- keep the accountability ledger until the user accepts the result
 
 ## Common Mistakes
 
 | Mistake | Fix |
-|---------|-----|
-| Skipping the chapter map confirmation | Always get user approval before bulk processing |
-| Chunks too large (50+ pages) | Keep to 20–30 pages for reliable vision reading |
-| Ignoring chunk boundary overlaps | Provide 1–2 page overlap, deduplicate in assembly |
-| Missing page metadata comments | Every page boundary needs `<!-- pdf-page: N -->` |
-| Running headers/footers in output | Strip repeated headers and page numbers |
-| Summarizing instead of transcribing | Preserve ALL original text faithfully |
-| Skipping validation loop | ALWAYS run validate-mdbook.sh before declaring done |
+| --- | --- |
+| Using 20 to 30 page chunks | Dispatch one reader and one verifier per page |
+| Treating `/fleet` like bash | Use native subagents, not shell workers |
+| Assembling before reconciliation | Reconcile every page before assembly |
+| Skipping table re-reads | Re-read every structured page separately |
+| Trusting build and lint alone | Pass the coverage audit too |
+| Ignoring margins or notes | Check footnotes, side-notes, and table notes |
 
 ## Red Flags — STOP
 
 | Thought | Reality |
-|---------|---------|
-| "The text layer is good enough" | Vision reading is more accurate for scanned books. Use vision. |
-| "I'll validate at the end" | Validate after EACH major phase, not just at the end. |
-| "This chapter is too short to bother with a file" | Every chapter gets its own file, no matter how short. |
-| "I can skip the overlap pages" | Chunk boundaries without overlap WILL lose content. |
-| "The user doesn't need to see the chapter map" | The chapter map confirmation is a HARD GATE. Always show it. |
-| "markdownlint warnings are just style" | Lint warnings indicate structural issues. Fix them all. |
-| "Close enough" | Run validate-mdbook.sh. Green or fix it. |
+| --- | --- |
+| "Build passes so it's fine" | Build proves rendering, not completeness |
+| "Multi-page chunks are good enough" | Page accountability is the contract |
+| "The verifier can spot-check later" | Every page gets a verifier first |
+| "The table mostly looks right" | Structured pages require specialist review |
+| "I can script my own worker fleet" | Use native Copilot CLI orchestration |
+| "Headers and footers are obvious" | Check margins and notes explicitly |
+| "Close enough" | Reconcile the exact page or the job is not done |
 
 ## Integration
 
-- **REQUIRED BACKGROUND:** Understand `superpowers:subagent-driven-development` for parallel dispatch
-- **REQUIRED BACKGROUND:** Understand `superpowers:dispatching-parallel-agents` for chunk processing
-- **Recommended:** Use `superpowers:verification-before-completion` before declaring the conversion done
+**Required workflow skills:**
+
+- **superpowers:dispatching-parallel-agents** — plan `/fleet` waves for
+  independent page readers, verifiers, and table specialists.
+- **superpowers:subagent-driven-development** — use the same review discipline
+  when reconciling verifier findings and re-read fixes.
+- **superpowers:verification-before-completion** — required before claiming
+  the conversion is complete.
+
+**Required references:**
+
+- `references/mdbook-formatting-guide.md`
+- `references/validation-checklist.md`
+
+**Remember:** native Copilot CLI orchestration handles agent fan-out.
+Deterministic scripts render and validate files. Do not mix those roles.

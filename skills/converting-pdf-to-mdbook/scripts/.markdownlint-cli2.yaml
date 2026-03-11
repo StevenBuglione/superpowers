@@ -33,7 +33,7 @@ config:
   # MD036 - Emphasis as heading: book content uses italicized names that aren't headings
   MD036: false
 
-  # MD060 - Table column style: book tables use compact pipe style from OCR
+  # MD060 - Table column style: scanned table layouts may use compact pipe style
   MD060: false
 
   # --- Enabled rules (important for book quality) ---

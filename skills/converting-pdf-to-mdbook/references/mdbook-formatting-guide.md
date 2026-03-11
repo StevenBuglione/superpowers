@@ -16,25 +16,38 @@
 
 ## Page Metadata Convention
 
-Mark every page boundary with an HTML comment so the original page number is recoverable from the Markdown source.
+Mark every page boundary with an HTML comment so page coverage is explicit, auditable,
+and recoverable from the Markdown source.
 
-- Format: `<!-- pdf-page: N -->` where `N` is the printed page number from the original PDF.
-- Place the comment **before** the first content that appears on that page.
-- If a paragraph spans a page break, place the comment between sentences at the closest natural break point. Never split a sentence with a page marker.
-- These comments are invisible in rendered mdBook output but extractable by tooling.
+- Use this exact contract: `<!-- pdf-page: physical=42 printed=iii -->`
+- `physical` is **required**. It records the PDF's physical page number and must
+  appear on every page marker.
+- `printed` is **optional**. Include it only when a printed page label
+  is visible on the page, and preserve that label exactly as shown
+  (`iii`, `42`, `A-12`, etc.).
+- If no printed page label is visible, omit `printed` entirely:
+  `<!-- pdf-page: physical=42 -->`
+- Place the comment **before** the first content that appears on that physical page.
+- If a paragraph spans a page break, place the comment at the closest natural break
+  point between sentences or blocks. Never split a sentence with a page marker.
+- Every physical page in scope must have exactly one corresponding page
+  marker. These comments are the accountability contract used for
+  validation and reconciliation.
 
 **Example:**
 
 ```markdown
-<!-- pdf-page: 42 -->
+<!-- pdf-page: physical=7 printed=iii -->
 
-This is the content from page 42. It may span multiple paragraphs.
+Preface text from the printed front matter.
 
-The second paragraph on page 42.
+<!-- pdf-page: physical=42 -->
 
-<!-- pdf-page: 43 -->
+This is the content from physical PDF page 42, which has no visible printed number.
 
-Content continues from page 43.
+<!-- pdf-page: physical=43 printed=1 -->
+
+Chapter 1 begins on the first printed page of the main text.
 ```
 
 ---
@@ -54,7 +67,7 @@ Content continues from page 43.
 
 - Never introduce typographic characters that mdBook cannot render. Straight quotes are the safe default.
 - Preserve all ligatures, accented characters, and non-ASCII glyphs from the source text exactly as they appear.
-- If the original uses a special character you cannot reproduce in UTF-8, insert `<!-- ocr-uncertain: "description" -->` and use the closest equivalent.
+- If the original uses a special character you cannot reproduce in UTF-8, insert `<!-- vision-uncertain: "description" -->` and use the closest equivalent.
 
 ---
 
@@ -204,11 +217,26 @@ on earth as it is in heaven.
 
 ## Tables
 
-- Use standard Markdown pipe tables for any tabular content.
-- Always include a header row with column alignment.
-- If a table is too wide for comfortable reading, either use an HTML `<table>` or restructure the data as a definition list.
+- Use Markdown pipe tables **only** for simple rectangular tables with
+  clearly bounded rows and columns, no merged cells, no ambiguous
+  header structure, and no continuation notes or layout dependencies.
+- Use HTML `<table>` markup as the default for complex or ambiguous
+  tables, including multi-row headers, merged cells, row groups,
+  legends, continuation tables, notes, side labels, or any layout that
+  cannot be represented faithfully in pipe-table syntax.
+- Never invent headers, captions, column names, summaries, legends, notes, or row
+  labels. Encode only what is present in the source.
+- Preserve captions, continuation labels, repeated headers, legends, row
+  groups, and table notes exactly as they appear in the source. If the
+  table continues across pages, preserve that continuation explicitly
+  rather than silently merging or normalizing it away.
+- Keep page metadata comments at the true page boundaries even when a table spans
+  pages.
+- Any page with structured content that behaves like a table, matrix,
+  calendar, ledger, or parallel-column form requires a dedicated
+  table-specialist re-read pass before chapter assembly.
 
-**Standard table:**
+**Simple rectangular table → pipe table:**
 
 ```markdown
 | Column 1 | Column 2 | Column 3 |
@@ -216,13 +244,29 @@ on earth as it is in heaven.
 | data     | data     | data     |
 ```
 
-**Right-aligned numbers:**
+**Complex table → HTML table:**
 
 ```markdown
-| Item      | Quantity |
-|-----------|--------:|
-| Candles   |      12 |
-| Vestments |       3 |
+<table>
+  <caption>Table 2. Daily Offices</caption>
+  <thead>
+    <tr>
+      <th rowspan="2">Season</th>
+      <th colspan="2">Office</th>
+    </tr>
+    <tr>
+      <th>Morning</th>
+      <th>Evening</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <th scope="row">Advent</th>
+      <td>Matins</td>
+      <td>Vespers</td>
+    </tr>
+  </tbody>
+</table>
 ```
 
 ---
@@ -279,21 +323,21 @@ on earth as it is in heaven.
 
 ---
 
-## OCR Uncertainty Markers
+## Vision Uncertainty Markers
 
 When the AI vision model is uncertain about a word or passage, mark it immediately after the uncertain text:
 
 ```markdown
-The rubrical<!-- ocr-uncertain: "rubrical" --> directions indicate…
+The rubrical<!-- vision-uncertain: "rubrical" --> directions indicate…
 ```
 
 **Rules:**
 
-- Place `<!-- ocr-uncertain: "word" -->` directly after the uncertain word with no space before the comment.
+- Place `<!-- vision-uncertain: "word" -->` directly after the uncertain word with no space before the comment.
 - These comments are invisible in rendered output but flagged for human review.
 - Use liberally — it is better to over-flag than to silently introduce errors.
 
-**Common OCR confusion pairs to watch for:**
+**Common vision-transcription confusion pairs to watch for:**
 
 | Often Confused | With    |
 |----------------|---------|
@@ -312,7 +356,8 @@ The rubrical<!-- ocr-uncertain: "rubrical" --> directions indicate…
 Strip all of the following from the converted output:
 
 - **Running headers/footers** — page titles repeated at the top or bottom of every page.
-- **Page numbers in text** — these are captured by `<!-- pdf-page: N -->` comments instead.
+- **Page numbers in text** — these are captured by `<!-- pdf-page: physical=42 printed=iii -->`
+  comments instead.
 - **Decorative horizontal rules** — ornamental dividers that carry no structural meaning.
 - **Publisher advertisements** — promotional pages for other books.
 - **Library stamps or markings** — "Property of…", barcodes, catalog numbers.

@@ -7,7 +7,7 @@ set -euo pipefail
 # Required tools:
 #   mdbook            – Builds mdBook projects from Markdown sources
 #   markdownlint-cli2 – Lints Markdown files for style/syntax issues
-#   poppler-utils     – Provides pdftoppm, pdfinfo, pdftotext for PDF handling
+#   poppler-utils     – Provides pdftoppm and pdfinfo for rendering/metadata
 #
 # Usage:
 #   ./setup-tools.sh          # Install missing tools then verify all
@@ -60,7 +60,7 @@ PKG_MANAGER="$(detect_pkg_manager)"
 # ---- Install helpers --------------------------------------------------------
 
 install_poppler() {
-  info "Installing poppler-utils (provides pdftoppm, pdfinfo, pdftotext)…"
+  info "Installing poppler-utils (provides pdftoppm and pdfinfo)…"
   case "$PKG_MANAGER" in
     apt)
       sudo apt-get update -qq && sudo apt-get install -y -qq poppler-utils
@@ -115,7 +115,7 @@ get_version() {
     markdownlint-cli2)
       markdownlint-cli2 --help 2>&1 | grep -oP 'v[\d.]+' | head -1 || echo ""
       ;;
-    pdftoppm|pdfinfo|pdftotext)
+    pdftoppm|pdfinfo)
       "$tool" -v 2>&1 | head -1 || echo ""
       ;;
   esac
@@ -171,7 +171,7 @@ check_and_install "mdbook" install_mdbook
 check_and_install "markdownlint-cli2" install_markdownlint
 
 # -- poppler-utils (check each binary individually) ---------------------------
-for poppler_tool in pdftoppm pdfinfo pdftotext; do
+for poppler_tool in pdftoppm pdfinfo; do
   check_and_install "$poppler_tool" install_poppler
 done
 

@@ -25,7 +25,6 @@ if [[ ! -f "$SUMMARY" ]]; then
   exit 1
 fi
 
-# --- Counters ---
 PASS=0
 FAIL=0
 WARN=0
@@ -43,6 +42,10 @@ report_fail() {
 report_warn() {
   echo "[WARN] $1"
   WARN=$((WARN + 1))
+}
+
+extract_summary_links() {
+  grep -oE '\[[^]]+\]\(([^)]+\.md)\)' "$SUMMARY" | sed -E 's/.*\(([^)]+)\)/\1/'
 }
 
 echo "=== mdBook Validation Report ==="
@@ -105,7 +108,7 @@ while IFS= read -r link; do
   if [[ ! -f "$TARGET" ]]; then
     BROKEN_LINKS+=("$link")
   fi
-done < <(grep -oE '\[.*?\]\(([^)]+\.md)\)' "$SUMMARY" | sed -E 's/.*\(([^)]+)\)/\1/')
+done < <(extract_summary_links)
 
 if [[ ${#BROKEN_LINKS[@]} -gt 0 ]]; then
   report_fail "SUMMARY.md links - ${#BROKEN_LINKS[@]} broken link(s) out of $LINK_COUNT"
@@ -140,56 +143,35 @@ else
 fi
 
 # -------------------------------------------------------
-# 5. Page metadata check
+# 5. Page coverage audit
 # -------------------------------------------------------
-MISSING_META=()
-NON_SEQUENTIAL=()
+AUDIT_OUTPUT=""
+AUDIT_RC=0
+AUDIT_OUTPUT=$("$SCRIPT_DIR/audit-page-coverage.sh" "$PROJECT_DIR" 2>&1) || AUDIT_RC=$?
+AUDIT_STATUS=$(printf '%s\n' "$AUDIT_OUTPUT" | sed -nE 's/^AUDIT_STATUS=([a-z]+)$/\1/p' | tail -1)
+AUDIT_DETAILS=$(printf '%s\n' "$AUDIT_OUTPUT" | sed '/^AUDIT_STATUS=/d')
 
-while IFS= read -r md_file; do
-  [[ -z "$md_file" ]] && continue
-  REL_PATH="${md_file#"$SRC_DIR/"}"
-
-  PAGES=()
-  while IFS= read -r page_num; do
-    [[ -n "$page_num" ]] && PAGES+=("$page_num")
-  done < <(grep -oE '<!-- pdf-page: ([0-9]+) -->' "$md_file" | grep -oE '[0-9]+' || true)
-
-  if [[ ${#PAGES[@]} -eq 0 ]]; then
-    MISSING_META+=("$REL_PATH")
-    continue
+if [[ -z "$AUDIT_STATUS" ]]; then
+  AUDIT_STATUS="fail"
+  if [[ -z "$AUDIT_DETAILS" ]]; then
+    AUDIT_DETAILS="Audit script returned exit code $AUDIT_RC without a status token"
   fi
-
-  # Check sequential within file
-  for ((i = 1; i < ${#PAGES[@]}; i++)); do
-    PREV=${PAGES[$((i - 1))]}
-    CURR=${PAGES[$i]}
-    if [[ $((CURR)) -ne $((PREV + 1)) ]]; then
-      NON_SEQUENTIAL+=("$REL_PATH (page $PREV -> $CURR)")
-      break
-    fi
-  done
-done < <(find "$SRC_DIR" -name '*.md' -type f | sort)
-
-HAS_META_ISSUE=false
-
-if [[ ${#MISSING_META[@]} -gt 0 ]]; then
-  HAS_META_ISSUE=true
-  report_warn "Page metadata - ${#MISSING_META[@]} file(s) missing pdf-page comments"
-  for m in "${MISSING_META[@]}"; do
-    echo "  src/$m"
-  done
 fi
 
-if [[ ${#NON_SEQUENTIAL[@]} -gt 0 ]]; then
-  HAS_META_ISSUE=true
-  report_warn "Page metadata - ${#NON_SEQUENTIAL[@]} file(s) with non-sequential pages"
-  for ns in "${NON_SEQUENTIAL[@]}"; do
-    echo "  src/$ns"
-  done
-fi
+case "$AUDIT_STATUS" in
+  pass)
+    report_pass "Page coverage audit - complete and ordered"
+    ;;
+  warn)
+    report_warn "Page coverage audit - advisory issues"
+    ;;
+  *)
+    report_fail "Page coverage audit - completeness problems detected"
+    ;;
+esac
 
-if [[ "$HAS_META_ISSUE" == false ]]; then
-  report_pass "Page metadata - sequential across all files"
+if [[ -n "$AUDIT_DETAILS" ]]; then
+  echo "$AUDIT_DETAILS" | sed 's/^/  /'
 fi
 
 # -------------------------------------------------------
